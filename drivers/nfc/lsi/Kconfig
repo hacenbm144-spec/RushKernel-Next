@@ -1,0 +1,89 @@
+#
+# Near Field Communication (NFC) devices
+#
+config SAMSUNG_NFC
+	tristate "Samsung NFC driver for module build"
+	default n
+	help
+	  Say Y here if you want to build support for NFC (Near field
+	  communication) devices.
+	  To compile this support as a module, choose M here: the module will
+	  be called nfc.
+
+config SEC_NFC_LSI
+	tristate "Samsung NFC driver"
+	default n
+	help
+	  SAMSUNG NFC Driver.
+	  This driver provides support for SAMSUNG NFC products.
+	  You should select your NFC product and interface.
+
+	  Say Y here to compile support for SAMSUNG NFC driver into the
+	  kernel.
+
+config ESE_P3_LSI
+	bool "eSE driver"
+	depends on SPI
+	default n
+	help
+	  Oberthur Driver.
+	  This driver provides support for LSI NXP combined ESE products.
+	  You should select your NFC product and interface.
+
+	  Say Y here to compile support for eSE driver into the kernel.
+
+config ESE_COLDRESET
+	bool "eSE support coldreset"
+	depends on ESE_P3_LSI
+	default n
+	help
+	  Cold reset function supported.
+	  This function supports for LSI ESE products.
+	  You should select your NFC product and interface.
+
+	  Say Y here to compile support for eSE driver into the kernel.
+
+config MAKE_NODE_USING_PLATFORM_DEVICE
+        bool "eSE platform driver"
+        default n
+        help
+          Using eSE platform driver.
+          Sometimes eSE node is created after permission setting
+          cause of SPI driver dependency.
+          So, use platform driver to make node first.
+
+config SEC_NFC_LOGGER
+	bool "NFC logger"
+	default n
+	help
+	  Enable NFC log.
+	  NFC log will be recorded at proc folder.
+	  but will not included at dumpstate log.
+	  so need to copy this file to log folder.
+
+config SEC_NFC_WAKELOCK_METHOD
+        int "nfc wakelock method"
+        default 0
+        help
+          Different functions must be used depending on the kernel version
+          for wakelock initialization.
+          0 - auto selection
+          1 - wakeup_source_init
+          2 - wakeup_source_register
+
+config SEC_NFC_LOGGER_ADD_ACPM_LOG
+        bool "NFC logger: add acpm log"
+        default n
+        depends on SEC_NFC_LOGGER
+        help
+          add acpm log.
+          this feature is for particualr AP.
+          rtc reg addr is needed to compare time
+
+config SEC_NFC_LOGGER_RTC_REG_ADDR
+        hex "NFC logger: add acpm log"
+        default 0x0
+        depends on SEC_NFC_LOGGER_ADD_ACPM_LOG
+        help
+          RTC time is to compare between acpm and kernel.
+          address value is hex.
