@@ -25,124 +25,12 @@ config BROADCOM_WIFI
 	help
 	  This is a configuration for Broadcom WLAN driver.
 
-config BCM4330
-	tristate "Broadcom 4330 wireless cards support"
-	depends on BROADCOM_WIFI
-	help
-	  This module adds support for wireless adapters based on
-	  Broadcom 4330 chipset.
-
-config BCM4343
-	tristate "Broadcom 4343 wireless cards support"
-	depends on BROADCOM_WIFI
-	help
-	  This module adds support for wireless adapters based on
-	  Broadcom 4343 chipset.
-
-config BCM4334
-	tristate "Broadcom 4334 wireless cards support"
-	depends on BROADCOM_WIFI
-	help
-	  This module adds support for wireless adapters based on
-	  Broadcom 4334 chipset.
-
-config BCM4335
-	tristate "Broadcom 4335 wireless cards support"
-	depends on BROADCOM_WIFI
-	help
-	  This module adds support for wireless adapters based on
-	  Broadcom 4335 chipset.
-
-config BCM4339
-	tristate "Broadcom 4339 wireless cards support"
-	depends on BROADCOM_WIFI
-	help
-	  This module adds support for wireless adapters based on
-	  Broadcom 4339 chipset.
-
-config BCM4354
-	tristate "Broadcom 4354 wireless cards support"
-	depends on BROADCOM_WIFI
-	help
-	  This module adds support for wireless adapters based on
-	  Broadcom 4354 chipset.
-
-config BCM43012
-	tristate "Broadcom 43012 wireless cards support"
-	depends on BROADCOM_WIFI
-	help
-	  This module adds support for wireless adapters based on
-	  Broadcom 43012 chipset.
-
-config BCM43013
-	tristate "Broadcom 43013 wireless cards support"
-	depends on BROADCOM_WIFI
-	help
-	  This module adds support for wireless adapters based on
-	  Broadcom 43013 chipset.
-
-config BCM4358
-	tristate "Broadcom 4358 wireless cards support"
-	depends on BROADCOM_WIFI
-	help
-	  This module adds support for wireless adapters based on
-	  Broadcom 4358 chipset.
-
-config BCM4359
-	tristate "Broadcom 4359 wireless cards support"
-	depends on BROADCOM_WIFI
-	help
-	  This module adds support for wireless adapters based on
-	  Broadcom 4359 chipset.
-
-config BCM4361
-	tristate "Broadcom 4361 wireless cards support"
-	depends on BROADCOM_WIFI
-	help
-	  This module adds support for wireless adapters based on
-	  Broadcom 4361 chipset.
-
-config BCM4375
-	tristate "Broadcom 4375 wireless cards support"
-	depends on BROADCOM_WIFI
-	help
-	  This module adds support for wireless adapters based on
-	  Broadcom 4375 chipset.
-
 config BCM4389
 	tristate "Broadcom 4389 wireless cards support"
 	depends on BROADCOM_WIFI
 	help
 	  This module adds support for wireless adapters based on
 	  Broadcom 4389 chipset.
-
-config BCM43241
-	tristate "Broadcom 43241 wireless cards support"
-	depends on BROADCOM_WIFI
-	help
-	  This module adds support for wireless adapters based on
-	  Broadcom 43241 chipset.
-
-config BCM43455
-        tristate "Broadcom 43455 wireless cards support"
-        depends on BROADCOM_WIFI
-        help
-          This module adds support for wireless adapters based on
-          Broadcom 43455 chipset.
-
-config BCM4334W
-	tristate "Broadcom 4334W wireless cards support"
-	depends on BROADCOM_WIFI
-	help
-	  This module adds support for wireless adapters based on
-	  Broadcom 4334W chipset.
-
-config BCM43454
-        tristate "Broadcom 43454 wireless cards support"
-        depends on BROADCOM_WIFI
-        help
-          This module adds support for wireless adapters based on
-          Broadcom 43454 chipset.
 
 config BCMDHD_FW_PATH
 	depends on BROADCOM_WIFI
@@ -167,7 +55,7 @@ config BROADCOM_WIFI_RESERVED_MEM
 
 config WIFI_BROADCOM_COB
         bool "BROADCOM WIFI COB"
-        depends on (BCM4389 || BCM43455 || BCM4343 || BCM43454 || BCM43012 || BCM43013)
+        depends on BCM4389
         help
           This is a configuration for Broadcom WIFI COB Type.
 
@@ -194,14 +82,14 @@ config WLAN_REGION_CODE
 
 config WLAIBSS
 	bool "Advanced IBSS mode"
-	depends on (BCM4335 || BCM4339 || BCM4354 || BCM4358 || BCM4359 || BCM4361 || BCM4375 || BCM4389)
+	depends on BCM4389
 	default y
 	help
 	  This is a configuration for Oxygen Network.
 
 config WL_RELMCAST
 	bool "Reliable Multicast Support"
-	depends on (BCM4335 || BCM4339 || BCM4354 || BCM4358 || BCM4359 || BCM4361 || BCM4375 || BCM4389)
+	depends on BCM4389
 	default y
 	help
 	  This is a configuration for RMC.
@@ -215,7 +103,7 @@ config WL_NAN
 
 config BCMDHD_PCIE
 	bool "Enable PCIe I/F Support"
-	depends on (BCM4354 || BCM4358 || BCM4359 || BCM4361 || BCM4375 || BCM4389) && PCI
+	depends on BCM4389 && PCI
 	default y
 	help
 	  Enable PCI Express I/F Support
@@ -267,13 +155,6 @@ config BCMDHD_GET_OOB_STATE
 	default y
 	help
 	Support WLAN_HOST_WAKE pin level information
-
-config WLAN_BCM4375_ADVANCED_FEATURES
-	bool "Support BCM4375 Advanced Feature"
-	depends on BCM4375
-	default n
-	help
-	Support BCM4375 Advanced Feature
 
 config WLAN_ANQP_RMAC_BACKPORTED
 	bool "Support backported kernel ANQP Random MAC Feature"
