@@ -202,6 +202,7 @@ obj-${CONFIG_VISION_SUPPORT3}	+= vision3/
 obj-$(CONFIG_SPU_VERIFY)        += spu_verify/
 
 include $(srctree)/drivers/Makefile.variant1
+obj-y += sec_panel_notifier_v2/ # ADDED BY LEGO AUTOMATICALLY: DO NOT SUBMIT
 obj-y += regulator/pmic_class/ # ADDED BY LEGO AUTOMATICALLY: DO NOT SUBMIT
 obj-y += gpu/drm/samsung/panel/s6e3fac/ # ADDED BY LEGO AUTOMATICALLY: DO NOT SUBMIT
 obj-y += gpu/drm/samsung/panel/s6e3hae/ # ADDED BY LEGO AUTOMATICALLY: DO NOT SUBMIT
