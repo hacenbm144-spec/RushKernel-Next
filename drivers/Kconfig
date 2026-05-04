@@ -272,6 +272,10 @@ source "drivers/usb/common/vbus_notifier/Kconfig" # ADDED BY LEGO AUTOMATICALLY:
 source "drivers/battery/core/Kconfig" # ADDED BY LEGO AUTOMATICALLY: DO NOT SUBMIT
 source "drivers/firmware/cirrus/Kconfig" # ADDED BY LEGO AUTOMATICALLY: DO NOT SUBMIT
 source "drivers/fingerprint/Kconfig" # ADDED BY LEGO AUTOMATICALLY: DO NOT SUBMIT
+source "drivers/gpu/drm/samsung/panel_usdm/s6e3fc5/Kconfig" # ADDED BY LEGO AUTOMATICALLY: DO NOT SUBMIT
+source "drivers/gpu/drm/samsung/panel_usdm/oled_common/Kconfig" # ADDED BY LEGO AUTOMATICALLY: DO NOT SUBMIT
+source "drivers/gpu/drm/samsung/panel_usdm/s6e3fc3/Kconfig" # ADDED BY LEGO AUTOMATICALLY: DO NOT SUBMIT
+source "drivers/gpu/drm/samsung/panel_usdm/Kconfig" # ADDED BY LEGO AUTOMATICALLY: DO NOT SUBMIT
 source "drivers/usb/typec/manager/Kconfig" # ADDED BY LEGO AUTOMATICALLY: DO NOT SUBMIT
 source "drivers/usb/typec/common/Kconfig" # ADDED BY LEGO AUTOMATICALLY: DO NOT SUBMIT
 source "drivers/sti/abc/Kconfig" # ADDED BY LEGO AUTOMATICALLY: DO NOT SUBMIT
