@@ -338,4 +338,9 @@ config MODEL_B0S
 	default n
 	depends on BOARD_S5E9925
 
+config MODEL_R11S
+	bool "Samsung Galaxy S23 FE 5G"
+	default n
+	depends on BOARD_S5E9925
+
 endmenu
