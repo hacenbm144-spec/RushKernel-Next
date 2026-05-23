@@ -19,6 +19,7 @@
 #include <linux/sched/rt.h>
 #include <linux/livepatch.h>
 #include <linux/mm_types.h>
+#include <linux/task_integrity.h>
 
 #include <asm/thread_info.h>
 
@@ -35,6 +36,9 @@ extern struct cred init_cred;
 #else
 #define INIT_PREV_CPUTIME(x)
 #endif
+
+# define INIT_INTEGRITY(tsk)
+# define INIT_TASK_INTEGRITY(integrity)
 
 #define INIT_TASK_COMM "swapper"
 
