@@ -55,6 +55,8 @@
 				 __HEAD_FLAG(PAGE_SIZE) | \
 				 __HEAD_FLAG(PHYS_BASE))
 
+#define PROCA_CONF_OFFSET_IMAGE_LE64
+
 /*
  * These will output as part of the Image header, which should be little-endian
  * regardless of the endianness of the kernel. While constant values could be
@@ -62,6 +64,7 @@
  */
 #define HEAD_SYMBOLS						\
 	DEFINE_IMAGE_LE64(_kernel_size_le, _end - _text);	\
-	DEFINE_IMAGE_LE64(_kernel_flags_le, __HEAD_FLAGS);
+	DEFINE_IMAGE_LE64(_kernel_flags_le, __HEAD_FLAGS);	\
+	PROCA_CONF_OFFSET_IMAGE_LE64
 
 #endif /* __ARM64_KERNEL_IMAGE_H */
