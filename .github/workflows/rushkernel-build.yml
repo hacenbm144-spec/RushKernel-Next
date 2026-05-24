@@ -1,0 +1,338 @@
+name: Build RushKernel-Next
+
+on:
+  workflow_dispatch:
+    inputs:
+      variant:
+        description: 'RushKernel variant to build'
+        required: true
+        default: 'westwood'
+        type: choice
+        options:
+          - vanilla      # No additions - sanity check that build works
+          - westwood     # + Westwood TCP (best for 4G/cellular)
+          - bbr          # + BBR + FQ_CODEL (best for general latency)
+          - network      # + BBR + Westwood + Vegas + CAKE qdisc
+          - full         # + Everything (network + WireGuard tuning)
+      device:
+        description: 'Target device'
+        required: true
+        default: 'b0s'
+        type: choice
+        options:
+          - b0s          # Galaxy S22 Ultra
+          - r0s          # Galaxy S22+
+          - g0s          # Galaxy S22
+      with_ksu:
+        description: 'Include KernelSU-Next'
+        required: true
+        default: true
+        type: boolean
+
+env:
+  KERNEL_NAME: RushKernel-Next
+  KERNEL_VERSION: v0.1
+  KBUILD_BUILD_USER: rushkernel
+  KBUILD_BUILD_HOST: github
+
+jobs:
+  build:
+    name: ${{ github.event.inputs.device }} ${{ github.event.inputs.variant }} ${{ github.event.inputs.with_ksu == 'true' && 'KSU' || 'noKSU' }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+
+    steps:
+      # ============================================================
+      - name: Checkout RushKernel-Next
+        uses: actions/checkout@v4
+        with:
+          submodules: 'recursive'
+          fetch-depth: 1
+
+      # ============================================================
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          sudo docker system prune -af 2>/dev/null || true
+          df -h /
+
+      # ============================================================
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            bc bison build-essential ccache cpio curl flex git \
+            kmod libelf-dev libssl-dev lz4 make rsync xz-utils \
+            zip zstd python3 python-is-python3 wget unzip
+
+      # ============================================================
+      - name: Setup ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: rushkernel-${{ github.event.inputs.device }}-${{ github.event.inputs.variant }}
+          max-size: 5G
+
+      # ============================================================
+      - name: Clone AOSP Clang r596125 (same as milxnaq uses)
+        run: |
+          mkdir -p toolchain
+          cd toolchain
+          # Use shallow clone of the kernel build prebuilts branch
+          git clone --depth=1 --filter=blob:none \
+            https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 \
+            -b master-kernel-build-2024 clang
+          # Find r596125 directory
+          ls clang/ | head -10
+          CLANG_DIR=$(find clang -maxdepth 2 -type d -name "clang-r596125*" | head -1)
+          if [ -z "$CLANG_DIR" ]; then
+            echo "❌ clang-r596125 not found, listing available:"
+            ls clang/
+            exit 1
+          fi
+          echo "CLANG_DIR=$GITHUB_WORKSPACE/toolchain/$CLANG_DIR" >> $GITHUB_ENV
+          echo "✅ Clang at: $CLANG_DIR"
+          $CLANG_DIR/bin/clang --version | head -2
+
+      # ============================================================
+      - name: Clone AnyKernel3 for packaging
+        run: |
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3 -b master anykernel3
+
+      # ============================================================
+      - name: Generate RushKernel config fragment
+        run: |
+          VARIANT="${{ github.event.inputs.variant }}"
+          FRAG=arch/arm64/configs/rushkernel-${VARIANT}.config
+
+          echo "Creating fragment: $FRAG"
+
+          case "$VARIANT" in
+            vanilla)
+              cat > $FRAG <<'EOF'
+          # RushKernel-Next: vanilla
+          # No additions - sanity check that build pipeline works
+          EOF
+              ;;
+
+            westwood)
+              cat > $FRAG <<'EOF'
+          # RushKernel-Next: Westwood TCP
+          # Best for cellular networks (4G/5G), reduces PUBG ping
+          CONFIG_TCP_CONG_ADVANCED=y
+          CONFIG_TCP_CONG_WESTWOOD=y
+          CONFIG_DEFAULT_WESTWOOD=y
+          CONFIG_DEFAULT_TCP_CONG="westwood"
+          EOF
+              ;;
+
+            bbr)
+              cat > $FRAG <<'EOF'
+          # RushKernel-Next: BBR + FQ
+          # Google's congestion control, best for general latency
+          CONFIG_TCP_CONG_ADVANCED=y
+          CONFIG_TCP_CONG_BBR=y
+          CONFIG_DEFAULT_BBR=y
+          CONFIG_DEFAULT_TCP_CONG="bbr"
+          # FQ qdisc pairs best with BBR
+          CONFIG_NET_SCH_DEFAULT=y
+          CONFIG_DEFAULT_FQ=y
+          CONFIG_DEFAULT_NET_SCH="fq"
+          EOF
+              ;;
+
+            network)
+              cat > $FRAG <<'EOF'
+          # RushKernel-Next: Full network stack
+          CONFIG_TCP_CONG_ADVANCED=y
+          CONFIG_TCP_CONG_BBR=y
+          CONFIG_TCP_CONG_WESTWOOD=y
+          CONFIG_TCP_CONG_VEGAS=y
+          CONFIG_TCP_CONG_HTCP=y
+          CONFIG_TCP_CONG_HYBLA=y
+          CONFIG_DEFAULT_BBR=y
+          CONFIG_DEFAULT_TCP_CONG="bbr"
+          # CAKE qdisc (better than FQ_CODEL for many scenarios)
+          CONFIG_NET_SCH_CAKE=y
+          CONFIG_NET_SCH_DEFAULT=y
+          CONFIG_DEFAULT_FQ=y
+          CONFIG_DEFAULT_NET_SCH="fq"
+          EOF
+              ;;
+
+            full)
+              cat > $FRAG <<'EOF'
+          # RushKernel-Next: FULL (all features)
+
+          # === TCP Congestion Controls ===
+          CONFIG_TCP_CONG_ADVANCED=y
+          CONFIG_TCP_CONG_BBR=y
+          CONFIG_TCP_CONG_WESTWOOD=y
+          CONFIG_TCP_CONG_VEGAS=y
+          CONFIG_TCP_CONG_HTCP=y
+          CONFIG_TCP_CONG_HYBLA=y
+          CONFIG_TCP_CONG_NV=y
+          CONFIG_TCP_CONG_LP=y
+          CONFIG_TCP_CONG_YEAH=y
+          CONFIG_DEFAULT_BBR=y
+          CONFIG_DEFAULT_TCP_CONG="bbr"
+
+          # === Queue Disciplines ===
+          CONFIG_NET_SCH_CAKE=y
+          CONFIG_NET_SCH_FQ_PIE=y
+          CONFIG_NET_SCH_DEFAULT=y
+          CONFIG_DEFAULT_FQ=y
+          CONFIG_DEFAULT_NET_SCH="fq"
+
+          # === TCP performance ===
+          CONFIG_TCP_MD5SIG=y
+          EOF
+              ;;
+
+            *)
+              echo "❌ Unknown variant: $VARIANT"
+              exit 1
+              ;;
+          esac
+
+          # Add RushKernel branding
+          cat >> $FRAG <<EOF
+
+          # === RushKernel branding ===
+          CONFIG_LOCALVERSION="-RushKernel-${KERNEL_VERSION}-${VARIANT}"
+          # CONFIG_LOCALVERSION_AUTO is not set
+          EOF
+
+          echo "=== Fragment contents ==="
+          cat $FRAG
+
+      # ============================================================
+      - name: Merge configs (milxnaq fragment style)
+        run: |
+          export PATH="$CLANG_DIR/bin:$PATH"
+          export ARCH=arm64
+
+          DEVICE="${{ github.event.inputs.device }}"
+          VARIANT="${{ github.event.inputs.variant }}"
+          KSU="${{ github.event.inputs.with_ksu }}"
+
+          # Build the list of fragments to merge
+          FRAGS=(
+            arch/arm64/configs/s5e9925_defconfig
+            arch/arm64/configs/${DEVICE}.config
+          )
+
+          if [ "$KSU" = "true" ] && [ -f arch/arm64/configs/ksu.config ]; then
+            FRAGS+=(arch/arm64/configs/ksu.config)
+          fi
+
+          FRAGS+=(arch/arm64/configs/rushkernel-${VARIANT}.config)
+
+          echo "Merging fragments:"
+          printf '  %s\n' "${FRAGS[@]}"
+
+          # Use kernel's merge_config.sh
+          mkdir -p out
+          bash scripts/kconfig/merge_config.sh -O out "${FRAGS[@]}"
+
+          # Verify merged config
+          echo ""
+          echo "=== Key configs in merged result ==="
+          grep -E "CONFIG_TCP_CONG_(BBR|WESTWOOD|CUBIC)|CONFIG_DEFAULT_TCP_CONG|CONFIG_LOCALVERSION|CONFIG_KSU" out/.config || true
+
+      # ============================================================
+      - name: Build kernel
+        run: |
+          export PATH="$CLANG_DIR/bin:$PATH"
+          export ARCH=arm64
+          export SUBARCH=arm64
+
+          MAKE_ARGS=(
+            O=out
+            ARCH=arm64
+            LLVM=1
+            LLVM_IAS=1
+            CC="ccache clang"
+            HOSTCC=clang
+            HOSTCXX=clang++
+            CROSS_COMPILE=aarch64-linux-gnu-
+            CROSS_COMPILE_ARM32=arm-linux-gnueabi-
+          )
+
+          echo "=== Building kernel image ==="
+          make -j$(nproc) "${MAKE_ARGS[@]}" Image dtbs modules || {
+            echo "❌ Build failed. Trying with less strict warnings..."
+            make -j$(nproc) "${MAKE_ARGS[@]}" KCFLAGS="-w" Image dtbs modules
+          }
+
+          # Verify outputs
+          echo ""
+          echo "=== Build outputs ==="
+          ls -la out/arch/arm64/boot/
+          if [ ! -f out/arch/arm64/boot/Image ]; then
+            echo "❌ Image not produced"
+            exit 1
+          fi
+          echo "✅ Image size: $(stat -c%s out/arch/arm64/boot/Image) bytes"
+
+      # ============================================================
+      - name: Package as AnyKernel3 zip
+        run: |
+          DEVICE="${{ github.event.inputs.device }}"
+          VARIANT="${{ github.event.inputs.variant }}"
+          KSU="${{ github.event.inputs.with_ksu == 'true' && 'KSU' || 'noKSU' }}"
+          TS=$(date +%Y%m%d-%H%M%S)
+          ZIP="${KERNEL_NAME}-${KERNEL_VERSION}_${DEVICE}_${VARIANT}_${KSU}_${TS}.zip"
+
+          # Copy kernel image
+          cp out/arch/arm64/boot/Image anykernel3/Image
+
+          # Concat DTBs if present
+          if ls out/arch/arm64/boot/dts/exynos/*.dtb >/dev/null 2>&1; then
+            cat out/arch/arm64/boot/dts/exynos/*.dtb > anykernel3/dtb
+            echo "✅ DTBs packaged"
+          fi
+
+          # Configure anykernel.sh
+          cd anykernel3
+          # Set kernel string
+          sed -i "s|kernel.string=.*|kernel.string=${KERNEL_NAME}-${KERNEL_VERSION}-${VARIANT} by hacenbm144-spec|" anykernel.sh
+          # Set device names
+          sed -i "s|device.name1=.*|device.name1=${DEVICE}|" anykernel.sh
+          # Allow SM-S908B / SM-S906B / SM-S901B as alternates
+          sed -i "s|device.name2=.*|device.name2=SM-S908B|" anykernel.sh
+          sed -i "s|device.name3=.*|device.name3=SM-S906B|" anykernel.sh
+          sed -i "s|device.name4=.*|device.name4=SM-S901B|" anykernel.sh
+
+          # Zip
+          zip -r9 "../${ZIP}" . -x ".git*" -x "README.md"
+          cd ..
+
+          # MD5
+          md5sum "${ZIP}" | tee "${ZIP}.md5"
+          ls -la "${ZIP}"
+
+          echo "ZIP_NAME=${ZIP}" >> $GITHUB_ENV
+
+      # ============================================================
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ZIP_NAME }}
+          path: |
+            ${{ env.ZIP_NAME }}
+            ${{ env.ZIP_NAME }}.md5
+          retention-days: 30
+          if-no-files-found: error
+
+      # ============================================================
+      - name: Build summary
+        run: |
+          echo "## ✅ Build complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Device:** ${{ github.event.inputs.device }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Variant:** ${{ github.event.inputs.variant }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **KSU:** ${{ github.event.inputs.with_ksu }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Artifact:** ${ZIP_NAME}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Download from the Artifacts section below ⬇️" >> $GITHUB_STEP_SUMMARY
