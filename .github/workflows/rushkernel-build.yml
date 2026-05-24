@@ -34,7 +34,6 @@ env:
   KERNEL_VERSION: v0.1
   KBUILD_BUILD_USER: rushkernel
   KBUILD_BUILD_HOST: github
-  # Base release to inherit vendor_boot.img and dtbo.img from
   BASE_RELEASE_TAG: v1.6
   BASE_RELEASE_REPO: milxnaq/android_kernel_samsung_s5e9925
 
@@ -234,25 +233,19 @@ jobs:
           [ -f out/arch/arm64/boot/Image ] || { echo "❌ Image missing"; exit 1; }
           echo "✅ Image: $(stat -c%s out/arch/arm64/boot/Image) bytes"
 
-      # ============================================================
-      # NEW: Download milxnaq's release for vendor_boot.img + dtbo.img
-      # ============================================================
       - name: Download base release (milxnaq's v1.6) for vendor_boot + dtbo
         run: |
           mkdir -p base_release
           cd base_release
 
           DEVICE="${{ github.event.inputs.device }}"
-          # Find the matching b0s KSU zip from milxnaq's release
           echo "[+] Fetching release info..."
           ASSETS=$(curl -s "https://api.github.com/repos/${BASE_RELEASE_REPO}/releases/tags/${BASE_RELEASE_TAG}" | jq -r '.assets[] | .browser_download_url')
           echo "Available assets:"
           echo "$ASSETS"
 
-          # Pick the zip matching our device + KSU variant
           MATCH=$(echo "$ASSETS" | grep -i "_${DEVICE}_KSU_" | head -1)
           if [ -z "$MATCH" ]; then
-            # Fallback to any device match
             MATCH=$(echo "$ASSETS" | grep -i "_${DEVICE}_" | head -1)
           fi
 
@@ -266,7 +259,6 @@ jobs:
           unzip -q base.zip
           ls -la files/
 
-          # Verify we got what we need
           for img in vendor_boot.img dtbo.img; do
             if [ ! -f "files/$img" ]; then
               echo "❌ Missing $img in base release"
@@ -275,33 +267,33 @@ jobs:
             echo "✅ Got files/$img ($(stat -c%s files/$img) bytes)"
           done
 
-      # ============================================================
-      # NEW: Build our own boot.img with the RushKernel-Next kernel
-      # ============================================================
       - name: Build boot.img with our kernel
         run: |
-          # Download magiskboot (easiest way to repack boot.img)
-          mkdir -p tools
-          cd tools
-          wget -q https://github.com/topjohnwu/Magisk/releases/download/v27.0/Magisk-v27.0.apk -O magisk.apk
-          unzip -q -j magisk.apk "lib/arm64-v8a/libmagiskboot.so" -d .
-          mv libmagiskboot.so magiskboot
-          chmod +x magiskboot
-          cd ..
+          # Use AOSP mkbootimg tools (pure Python, x86_64 compatible)
+          git clone --depth=1 https://android.googlesource.com/platform/system/tools/mkbootimg tools/mkbootimg
 
-          # Use milxnaq's boot.img as template, swap kernel
           mkdir -p boot_work
-          cp base_release/files/boot.img boot_work/
           cd boot_work
+          cp ../base_release/files/boot.img .
 
           echo "[+] Unpacking milxnaq's boot.img..."
-          ../tools/magiskboot unpack boot.img
+          python3 ../tools/mkbootimg/unpack_bootimg.py --boot_img boot.img --out unpacked --format mkbootimg > mkbootimg_args.txt
+          echo "=== Original mkbootimg args ==="
+          cat mkbootimg_args.txt
 
-          echo "[+] Replacing kernel with our RushKernel build..."
-          cp ../out/arch/arm64/boot/Image kernel
+          echo "[+] Replacing kernel..."
+          cp ../out/arch/arm64/boot/Image unpacked/kernel
 
           echo "[+] Repacking boot.img..."
-          ../tools/magiskboot repack boot.img new-boot.img
+          ARGS=$(cat mkbootimg_args.txt)
+          ARGS=$(echo "$ARGS" | sed "s|--kernel [^ ]*|--kernel unpacked/kernel|g")
+          ARGS=$(echo "$ARGS" | sed "s|--ramdisk [^ ]*|--ramdisk unpacked/ramdisk|g")
+          ARGS=$(echo "$ARGS" | sed "s|--dtb [^ ]*|--dtb unpacked/dtb|g" 2>/dev/null || true)
+
+          echo "=== Final mkbootimg args ==="
+          echo "$ARGS"
+
+          python3 ../tools/mkbootimg/mkbootimg.py $ARGS --output new-boot.img
 
           ls -la new-boot.img
           cp new-boot.img ../boot.img
@@ -309,9 +301,6 @@ jobs:
 
           echo "✅ boot.img repacked: $(stat -c%s boot.img) bytes"
 
-      # ============================================================
-      # NEW: Package the milxnaq-style flashable zip
-      # ============================================================
       - name: Package milxnaq-style flashable zip
         run: |
           DEVICE="${{ github.event.inputs.device }}"
@@ -323,21 +312,17 @@ jobs:
           mkdir -p package/files
           mkdir -p package/META-INF/com/google/android
 
-          # Copy our boot.img and milxnaq's vendor_boot.img + dtbo.img
           cp boot.img package/files/boot.img
           cp base_release/files/vendor_boot.img package/files/vendor_boot.img
           cp base_release/files/dtbo.img package/files/dtbo.img
 
-          # Use milxnaq's updater-script (same format he uses)
           cp build/updater-script package/META-INF/com/google/android/updater-script
           cp build/update-binary package/META-INF/com/google/android/update-binary
           chmod +x package/META-INF/com/google/android/update-binary
 
-          # Verify
           ls -la package/files/
           ls -la package/META-INF/com/google/android/
 
-          # Zip it
           cd package
           zip -r9 "../${ZIP}" .
           cd ..
