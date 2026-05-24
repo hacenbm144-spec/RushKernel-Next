@@ -1,4 +1,4 @@
-me: Build RushKernel-Next
+name: Build RushKernel-Next
 
 on:
   workflow_dispatch:
