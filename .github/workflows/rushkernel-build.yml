@@ -1,4 +1,4 @@
-name: Build RushKernel-Next
+me: Build RushKernel-Next
 
 on:
   workflow_dispatch:
@@ -34,6 +34,9 @@ env:
   KERNEL_VERSION: v0.1
   KBUILD_BUILD_USER: rushkernel
   KBUILD_BUILD_HOST: github
+  # Base release to inherit vendor_boot.img and dtbo.img from
+  BASE_RELEASE_TAG: v1.6
+  BASE_RELEASE_REPO: milxnaq/android_kernel_samsung_s5e9925
 
 jobs:
   build:
@@ -61,7 +64,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             bc bison build-essential ccache cpio curl flex git \
             kmod libelf-dev libssl-dev lz4 make rsync xz-utils \
-            zip zstd python3 python-is-python3 wget unzip \
+            zip zstd python3 python-is-python3 wget unzip jq \
             gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi binutils-aarch64-linux-gnu
 
       - name: Setup ccache
@@ -75,59 +78,40 @@ jobs:
           mkdir -p toolchain/clang
           cd toolchain/clang
 
-          echo "[+] Finding latest ZyC Clang release..."
           LATEST=$(curl -s https://api.github.com/repos/ZyCromerZ/Clang/releases/latest \
                    | grep "browser_download_url.*tar.gz" \
                    | head -1 \
                    | cut -d'"' -f4)
 
           if [ -z "$LATEST" ]; then
-            echo "[!] API returned no URL, using known-good fallback"
             LATEST="https://github.com/ZyCromerZ/Clang/releases/download/19.0.0git-20240414-release/Clang-19.0.0git-20240414.tar.gz"
           fi
 
           echo "[+] Downloading: $LATEST"
           wget -q --show-progress -O clang.tar.gz "$LATEST"
 
-          echo "[+] Extracting..."
           tar xf clang.tar.gz
           rm clang.tar.gz
-          ls -la
 
-          # Find the bin directory
           if [ -f bin/clang ]; then
             CLANG_DIR="$PWD"
           else
             SUB=$(ls -d */ 2>/dev/null | head -1)
-            if [ -n "$SUB" ] && [ -f "$SUB/bin/clang" ]; then
-              CLANG_DIR="$PWD/${SUB%/}"
-            else
-              echo "❌ Can't find clang binary"
-              find . -name clang -type f 2>/dev/null
-              exit 1
-            fi
+            CLANG_DIR="$PWD/${SUB%/}"
           fi
 
           echo "CLANG_DIR=$CLANG_DIR" >> $GITHUB_ENV
-          echo "[+] CLANG_DIR=$CLANG_DIR"
           "$CLANG_DIR/bin/clang" --version
-
-      - name: Clone AnyKernel3
-        run: |
-          git clone --depth=1 https://github.com/osm0sis/AnyKernel3 -b master anykernel3
 
       - name: Generate RushKernel config fragment
         run: |
           VARIANT="${{ github.event.inputs.variant }}"
           FRAG="arch/arm64/configs/rushkernel-${VARIANT}.config"
 
-          echo "Creating: $FRAG"
-
           case "$VARIANT" in
             vanilla)
               cat > "$FRAG" <<EOF
           # RushKernel-Next: vanilla
-          # No additions - sanity check build pipeline
           EOF
               ;;
             westwood)
@@ -190,10 +174,6 @@ jobs:
           CONFIG_TCP_MD5SIG=y
           EOF
               ;;
-            *)
-              echo "❌ Unknown variant: $VARIANT"
-              exit 1
-              ;;
           esac
 
           cat >> "$FRAG" <<EOF
@@ -205,7 +185,7 @@ jobs:
           echo "=== Fragment ==="
           cat "$FRAG"
 
-      - name: Merge configs (fragment style)
+      - name: Merge configs
         run: |
           export PATH="$CLANG_DIR/bin:$PATH"
           export ARCH=arm64
@@ -225,29 +205,16 @@ jobs:
 
           FRAGS+=(arch/arm64/configs/rushkernel-${VARIANT}.config)
 
-          echo "Fragments to merge:"
-          printf '  %s\n' "${FRAGS[@]}"
-
           mkdir -p out
           bash scripts/kconfig/merge_config.sh -O out "${FRAGS[@]}"
-
-          echo ""
-          echo "=== Key resulting configs ==="
-          grep -E "CONFIG_TCP_CONG_(BBR|WESTWOOD|CUBIC)|CONFIG_DEFAULT_TCP_CONG|CONFIG_LOCALVERSION|CONFIG_KSU|CONFIG_MODEL_" out/.config | head -20 || true
 
       - name: Build kernel
         run: |
           export PATH="$CLANG_DIR/bin:$PATH"
           export ARCH=arm64
           export SUBARCH=arm64
-          export KBUILD_BUILD_USER=rushkernel
-          export KBUILD_BUILD_HOST=github
 
-          echo "=== Compiler ==="
-          clang --version
-
-          echo ""
-          echo "=== Building (15-30 min)... ==="
+          echo "=== Building kernel (15-30 min)... ==="
           set +e
           make -j$(nproc) O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 \
             CC="ccache clang" HOSTCC=clang HOSTCXX=clang++ \
@@ -258,22 +225,94 @@ jobs:
           set -e
 
           if [ $BUILD_RC -ne 0 ]; then
-            echo "❌ Build failed (code $BUILD_RC)"
-            echo "=== Last 80 lines ==="
+            echo "❌ Build failed"
             tail -80 build.log
             exit $BUILD_RC
           fi
 
-          echo ""
-          echo "=== Outputs ==="
           ls -la out/arch/arm64/boot/
-          if [ ! -f out/arch/arm64/boot/Image ]; then
-            echo "❌ Image not produced"
-            exit 1
-          fi
+          [ -f out/arch/arm64/boot/Image ] || { echo "❌ Image missing"; exit 1; }
           echo "✅ Image: $(stat -c%s out/arch/arm64/boot/Image) bytes"
 
-      - name: Package as AnyKernel3 zip
+      # ============================================================
+      # NEW: Download milxnaq's release for vendor_boot.img + dtbo.img
+      # ============================================================
+      - name: Download base release (milxnaq's v1.6) for vendor_boot + dtbo
+        run: |
+          mkdir -p base_release
+          cd base_release
+
+          DEVICE="${{ github.event.inputs.device }}"
+          # Find the matching b0s KSU zip from milxnaq's release
+          echo "[+] Fetching release info..."
+          ASSETS=$(curl -s "https://api.github.com/repos/${BASE_RELEASE_REPO}/releases/tags/${BASE_RELEASE_TAG}" | jq -r '.assets[] | .browser_download_url')
+          echo "Available assets:"
+          echo "$ASSETS"
+
+          # Pick the zip matching our device + KSU variant
+          MATCH=$(echo "$ASSETS" | grep -i "_${DEVICE}_KSU_" | head -1)
+          if [ -z "$MATCH" ]; then
+            # Fallback to any device match
+            MATCH=$(echo "$ASSETS" | grep -i "_${DEVICE}_" | head -1)
+          fi
+
+          if [ -z "$MATCH" ]; then
+            echo "❌ No matching release zip found for device=${DEVICE}"
+            exit 1
+          fi
+
+          echo "[+] Downloading: $MATCH"
+          wget -q --show-progress -O base.zip "$MATCH"
+          unzip -q base.zip
+          ls -la files/
+
+          # Verify we got what we need
+          for img in vendor_boot.img dtbo.img; do
+            if [ ! -f "files/$img" ]; then
+              echo "❌ Missing $img in base release"
+              exit 1
+            fi
+            echo "✅ Got files/$img ($(stat -c%s files/$img) bytes)"
+          done
+
+      # ============================================================
+      # NEW: Build our own boot.img with the RushKernel-Next kernel
+      # ============================================================
+      - name: Build boot.img with our kernel
+        run: |
+          # Download magiskboot (easiest way to repack boot.img)
+          mkdir -p tools
+          cd tools
+          wget -q https://github.com/topjohnwu/Magisk/releases/download/v27.0/Magisk-v27.0.apk -O magisk.apk
+          unzip -q -j magisk.apk "lib/arm64-v8a/libmagiskboot.so" -d .
+          mv libmagiskboot.so magiskboot
+          chmod +x magiskboot
+          cd ..
+
+          # Use milxnaq's boot.img as template, swap kernel
+          mkdir -p boot_work
+          cp base_release/files/boot.img boot_work/
+          cd boot_work
+
+          echo "[+] Unpacking milxnaq's boot.img..."
+          ../tools/magiskboot unpack boot.img
+
+          echo "[+] Replacing kernel with our RushKernel build..."
+          cp ../out/arch/arm64/boot/Image kernel
+
+          echo "[+] Repacking boot.img..."
+          ../tools/magiskboot repack boot.img new-boot.img
+
+          ls -la new-boot.img
+          cp new-boot.img ../boot.img
+          cd ..
+
+          echo "✅ boot.img repacked: $(stat -c%s boot.img) bytes"
+
+      # ============================================================
+      # NEW: Package the milxnaq-style flashable zip
+      # ============================================================
+      - name: Package milxnaq-style flashable zip
         run: |
           DEVICE="${{ github.event.inputs.device }}"
           VARIANT="${{ github.event.inputs.variant }}"
@@ -281,20 +320,26 @@ jobs:
           TS=$(date +%Y%m%d-%H%M%S)
           ZIP="${KERNEL_NAME}-${KERNEL_VERSION}_${DEVICE}_${VARIANT}_${KSU}_${TS}.zip"
 
-          cp out/arch/arm64/boot/Image anykernel3/Image
+          mkdir -p package/files
+          mkdir -p package/META-INF/com/google/android
 
-          if ls out/arch/arm64/boot/dts/exynos/*.dtb >/dev/null 2>&1; then
-            cat out/arch/arm64/boot/dts/exynos/*.dtb > anykernel3/dtb
-          fi
+          # Copy our boot.img and milxnaq's vendor_boot.img + dtbo.img
+          cp boot.img package/files/boot.img
+          cp base_release/files/vendor_boot.img package/files/vendor_boot.img
+          cp base_release/files/dtbo.img package/files/dtbo.img
 
-          cd anykernel3
-          sed -i "s|kernel.string=.*|kernel.string=${KERNEL_NAME}-${KERNEL_VERSION}-${VARIANT} by hacenbm144-spec|" anykernel.sh
-          sed -i "s|device.name1=.*|device.name1=${DEVICE}|" anykernel.sh
-          sed -i "s|device.name2=.*|device.name2=SM-S908B|" anykernel.sh
-          sed -i "s|device.name3=.*|device.name3=SM-S906B|" anykernel.sh
-          sed -i "s|device.name4=.*|device.name4=SM-S901B|" anykernel.sh
+          # Use milxnaq's updater-script (same format he uses)
+          cp build/updater-script package/META-INF/com/google/android/updater-script
+          cp build/update-binary package/META-INF/com/google/android/update-binary
+          chmod +x package/META-INF/com/google/android/update-binary
 
-          zip -r9 "../${ZIP}" . -x ".git*" -x "README.md"
+          # Verify
+          ls -la package/files/
+          ls -la package/META-INF/com/google/android/
+
+          # Zip it
+          cd package
+          zip -r9 "../${ZIP}" .
           cd ..
 
           md5sum "${ZIP}" | tee "${ZIP}.md5"
@@ -314,6 +359,11 @@ jobs:
       - name: Build summary
         run: |
           echo "## ✅ Build complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**3-img flashable zip in milxnaq style:**" >> $GITHUB_STEP_SUMMARY
+          echo "- boot.img → RushKernel-Next built from source" >> $GITHUB_STEP_SUMMARY
+          echo "- vendor_boot.img → inherited from milxnaq v1.6" >> $GITHUB_STEP_SUMMARY
+          echo "- dtbo.img → inherited from milxnaq v1.6" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "- **Device:** ${{ github.event.inputs.device }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Variant:** ${{ github.event.inputs.variant }}" >> $GITHUB_STEP_SUMMARY
