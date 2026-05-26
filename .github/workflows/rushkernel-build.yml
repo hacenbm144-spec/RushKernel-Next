@@ -234,7 +234,6 @@ jobs:
           [ -f out/arch/arm64/boot/Image ] || { echo "❌ Image missing"; exit 1; }
           echo "✅ Image: $(stat -c%s out/arch/arm64/boot/Image) bytes"
 
-          # Compress kernel to LZ4 (matches milxnaq)
           lz4 -B6 --content-size -f -9 out/arch/arm64/boot/Image out/arch/arm64/boot/Image.lz4
           echo "✅ Image.lz4: $(stat -c%s out/arch/arm64/boot/Image.lz4) bytes"
 
@@ -257,18 +256,15 @@ jobs:
           find out/modules_staging -name "*.ko" | wc -l
           find out/modules_staging -name "*.ko" | head -20
 
-          # Build the flat /lib/modules/ structure like milxnaq's
           mkdir -p modules_flat/lib/modules
           find out/modules_staging -name "*.ko" -exec cp {} modules_flat/lib/modules/ \;
 
-          # Strip further for size
           "$CLANG_DIR/bin/llvm-strip" --strip-debug modules_flat/lib/modules/*.ko 2>/dev/null || true
 
           echo "=== Final module count ==="
           ls modules_flat/lib/modules/*.ko | wc -l
           du -sh modules_flat/
 
-          # Save list for comparison
           ls modules_flat/lib/modules/*.ko | xargs -n1 basename | sort > our_modules_list.txt
           echo "First 20 modules:"
           head -20 our_modules_list.txt
@@ -308,7 +304,6 @@ jobs:
 
           echo "[+] Unpacking milxnaq's boot.img..."
           python3 ../tools/mkbootimg/unpack_bootimg.py --boot_img boot.img --out unpacked --format mkbootimg > mkbootimg_args.txt
-          echo "=== Original args ==="
           cat mkbootimg_args.txt
 
           echo "[+] Replacing kernel with LZ4 RushKernel..."
@@ -333,39 +328,23 @@ jobs:
 
           echo "[+] Unpacking milxnaq's vendor_boot.img..."
           python3 ../tools/mkbootimg/unpack_bootimg.py --boot_img vendor_boot.img --out unpacked --format mkbootimg > mkbootimg_args.txt
-          echo "=== Original args ==="
           cat mkbootimg_args.txt
           ls -la unpacked/
 
-          # The vendor_boot has 2 ramdisks:
-          # - vendor_ramdisk00: regular vendor ramdisk (998 KB) - KEEP as-is
-          # - vendor_ramdisk01: dlkm (kernel modules, 19.5 MB) - REPLACE with ours
-
           echo "[+] Building new dlkm ramdisk from our modules..."
-
-          # Build CPIO archive with our modules
           cd ../modules_flat
           find . -print0 | sort -z | cpio --null -o -H newc > ../vboot_work/our_dlkm.cpio
           cd ../vboot_work
 
           echo "Our CPIO size: $(stat -c%s our_dlkm.cpio) bytes"
-          echo "Their CPIO size (after decompression): ~58 MB"
 
-          # Compress with LZ4 legacy format (Samsung's format)
           python3 <<'PYEOF'
-          import lz4.block
-          import struct
-
+          import lz4.block, struct, os
           with open('our_dlkm.cpio', 'rb') as f:
               data = f.read()
-
-          # LZ4 legacy format: magic + blocks of (size:4 LE + compressed_data)
-          # Block size limit: 8 MB
           BLOCK_SIZE = 8 * 1024 * 1024
-
           out = open('our_dlkm.lz4', 'wb')
-          out.write(b'\x02\x21\x4c\x18')  # LZ4 legacy magic
-
+          out.write(b'\x02\x21\x4c\x18')
           pos = 0
           while pos < len(data):
               chunk = data[pos:pos+BLOCK_SIZE]
@@ -373,55 +352,50 @@ jobs:
               out.write(struct.pack('<I', len(compressed)))
               out.write(compressed)
               pos += BLOCK_SIZE
-
           out.close()
-          print(f"Compressed dlkm: {pos} -> {out.tell() if False else __import__('os').path.getsize('our_dlkm.lz4')} bytes")
+          print(f"Compressed: {os.path.getsize('our_dlkm.lz4')} bytes (was {len(data)})")
           PYEOF
 
           ls -la our_dlkm.lz4
-          ls -la unpacked/vendor_ramdisk01
+          cp our_dlkm.lz4 unpacked/vendor_ramdisk01
 
-          # Replace vendor_ramdisk01 with our new dlkm
-          # The "vendor-ramdisk-by-name" dir contains the individual ramdisks - use that for repacking
-          ls -la unpacked/vendor-ramdisk-by-name/ 2>/dev/null || ls -la unpacked/
+          echo "[+] Repacking vendor_boot.img with Python (avoids shell arg parsing issues)..."
+          python3 <<'PYEOF'
+          import subprocess, sys, os
 
-          # Find the dlkm ramdisk file by name and replace it
-          if [ -d unpacked/vendor-ramdisk-by-name ]; then
-            # Find dlkm-named ramdisk
-            DLKM_FILE=$(ls unpacked/vendor-ramdisk-by-name/ | grep -i dlkm | head -1)
-            if [ -n "$DLKM_FILE" ]; then
-              echo "Replacing: unpacked/vendor-ramdisk-by-name/$DLKM_FILE"
-              cp our_dlkm.lz4 "unpacked/vendor-ramdisk-by-name/$DLKM_FILE"
-            else
-              # Fallback: replace by index
-              echo "No named dlkm file, replacing vendor_ramdisk01"
-              cp our_dlkm.lz4 unpacked/vendor_ramdisk01
-            fi
-          else
-            cp our_dlkm.lz4 unpacked/vendor_ramdisk01
-          fi
+          mkbootimg = '../tools/mkbootimg/mkbootimg.py'
 
-          # Build the args for repacking
-          echo "[+] Repacking vendor_boot.img..."
-          ARGS=$(cat mkbootimg_args.txt)
-
-          # Update vendor_ramdisk paths to our local copies
-          ARGS=$(echo "$ARGS" | sed "s|--vendor_boot [^ ]*|--vendor_boot new-vendor_boot.img|g")
-          ARGS=$(echo "$ARGS" | sed "s|--dtb [^ ]*|--dtb unpacked/dtb|g")
-
-          # Need to find the actual ramdisk arguments and fix paths
-          # AOSP mkbootimg uses --vendor_ramdisk_fragment for v4 vendor_boot
-          # Just point to the unpacked files
-          echo "=== Modified args ==="
-          echo "$ARGS"
-
-          python3 ../tools/mkbootimg/mkbootimg.py $ARGS
+          args = [
+              'python3', mkbootimg,
+              '--header_version', '4',
+              '--pagesize', '0x00001000',
+              '--base', '0x00000000',
+              '--kernel_offset', '0x10008000',
+              '--ramdisk_offset', '0x14000000',
+              '--tags_offset', '0x10000000',
+              '--dtb_offset', '0x0000000011f00000',
+              '--vendor_cmdline', 'bootconfig loop.max_part=7',
+              '--board', 'SRPUH13B009',
+              '--dtb', 'unpacked/dtb',
+              '--vendor_bootconfig', 'unpacked/bootconfig',
+              '--ramdisk_type', '1',
+              '--ramdisk_name', '',
+              '--vendor_ramdisk_fragment', 'unpacked/vendor_ramdisk00',
+              '--ramdisk_type', '3',
+              '--ramdisk_name', 'dlkm',
+              '--vendor_ramdisk_fragment', 'unpacked/vendor_ramdisk01',
+              '--vendor_boot', 'new-vendor_boot.img',
+          ]
+          print("Running:", ' '.join(repr(a) for a in args))
+          result = subprocess.run(args, check=True)
+          print("Done")
+          PYEOF
 
           ls -la new-vendor_boot.img
           cp new-vendor_boot.img ../vendor_boot.img
           cd ..
           echo "✅ vendor_boot.img: $(stat -c%s vendor_boot.img) bytes"
-          echo "📊 Original size: $(stat -c%s base_release/files/vendor_boot.img) bytes"
+          echo "📊 Original: $(stat -c%s base_release/files/vendor_boot.img) bytes"
 
       - name: Package milxnaq-style flashable zip
         run: |
