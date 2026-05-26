@@ -233,6 +233,12 @@ jobs:
           [ -f out/arch/arm64/boot/Image ] || { echo "❌ Image missing"; exit 1; }
           echo "✅ Image: $(stat -c%s out/arch/arm64/boot/Image) bytes"
 
+          # Compress kernel to LZ4 to match milxnaq's boot.img format
+          echo "[+] Compressing kernel to LZ4 (matches milxnaq's format)..."
+          lz4 -B6 --content-size -f -9 out/arch/arm64/boot/Image out/arch/arm64/boot/Image.lz4
+          ls -la out/arch/arm64/boot/Image*
+          echo "✅ Image.lz4: $(stat -c%s out/arch/arm64/boot/Image.lz4) bytes"
+
       - name: Download base release (milxnaq's v1.6) for vendor_boot + dtbo
         run: |
           mkdir -p base_release
@@ -281,8 +287,12 @@ jobs:
           echo "=== Original mkbootimg args ==="
           cat mkbootimg_args.txt
 
-          echo "[+] Replacing kernel..."
-          cp ../out/arch/arm64/boot/Image unpacked/kernel
+          echo "[+] Replacing kernel with LZ4-compressed RushKernel build..."
+          cp ../out/arch/arm64/boot/Image.lz4 unpacked/kernel
+
+          echo "[+] Verifying sizes:"
+          echo "milxnaq kernel size: $(stat -c%s boot.img) bytes (full boot.img)"
+          echo "our compressed kernel: $(stat -c%s unpacked/kernel) bytes"
 
           echo "[+] Repacking boot.img..."
           ARGS=$(cat mkbootimg_args.txt)
@@ -300,6 +310,7 @@ jobs:
           cd ..
 
           echo "✅ boot.img repacked: $(stat -c%s boot.img) bytes"
+          echo "📊 Reference milxnaq boot.img: $(stat -c%s base_release/files/boot.img) bytes"
 
       - name: Package milxnaq-style flashable zip
         run: |
@@ -345,8 +356,8 @@ jobs:
         run: |
           echo "## ✅ Build complete" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**3-img flashable zip in milxnaq style:**" >> $GITHUB_STEP_SUMMARY
-          echo "- boot.img → RushKernel-Next built from source" >> $GITHUB_STEP_SUMMARY
+          echo "**3-img flashable zip with LZ4-compressed kernel:**" >> $GITHUB_STEP_SUMMARY
+          echo "- boot.img → RushKernel-Next (LZ4 compressed, matches milxnaq format)" >> $GITHUB_STEP_SUMMARY
           echo "- vendor_boot.img → inherited from milxnaq v1.6" >> $GITHUB_STEP_SUMMARY
           echo "- dtbo.img → inherited from milxnaq v1.6" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
